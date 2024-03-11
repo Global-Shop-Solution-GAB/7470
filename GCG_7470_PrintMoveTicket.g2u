@@ -1,0 +1,635 @@
+﻿Program.Sub.ScreenSU.Start
+Program.Sub.ScreenSU.End
+
+Program.Sub.Preflight.Start
+	
+	V.Global.iBIRunID.Declare()
+	V.Global.iLogID.Declare()
+	
+	V.Global.sError.Declare()
+	V.Global.sJob.Declare()
+	V.Global.sQty.Declare()
+	V.Global.sSeq.Declare()
+	V.Global.sSQL.Declare()
+	V.Global.sSuffix.Declare()
+	V.Global.sBody.Declare
+	F.Intrinsic.String.Build("String","A move ticket has been printed. See below for details:{0}{0}#BODY#",V.Ambient.NewLine,V.Global.sBody)
+	V.Global.sSubject.Declare("String","Move ticket for Job: #JOB# Suffix: #SUFFIX# Seq: #SEQ#")
+	
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+	
+	V.Local.i.Declare()
+	V.Local.iRows.Declare()
+	
+	V.Local.sClosed.Declare()
+	V.Local.sComments.Declare()
+	V.Local.sQuery.Declare()
+	V.Local.sReturn.Declare()
+	V.Local.sReturn2.Declare()
+	
+	F.Intrinsic.Control.Try
+		
+		V.Global.iBIRunID.Set(-1)
+		V.Global.iLogID.Set(-1)
+		
+		V.Global.sQty.Set(".000000")
+		
+		F.ODBC.Connection!con.OpenCompanyConnection()
+		
+		
+		' If called from the Update screen populate hook, then just send back "Move Ticket" so that the Script 1 button name can change.
+		F.Intrinsic.Control.If(V.Caller.Hook, =, "50600")
+			V.Passed.UpdateJobsView-Script1-1.set("Move Ticket")
+			F.Intrinsic.Control.CallSub(Unload)
+		F.Intrinsic.Control.EndIf
+		' If called from a different hook then continue.
+		
+		
+		' Verify that a printer has been set up for the current SFDC (On Line System > Administration > SFDC Move Ticket Terminal Maintenance).
+		F.Intrinsic.String.Build("SELECT printer FROM GCG_7470_mv_tckt_su WHERE trmnl = '{0}' ", V.Caller.Terminal, V.Local.sQuery)
+		F.ODBC.Connection!con.ExecuteAndReturn(V.Local.sQuery, V.Local.sReturn)
+		F.Intrinsic.Control.If(V.Ambient.ExecuteAndReturnEOF)
+			F.Intrinsic.Control.CallSub(Unload)
+		F.Intrinsic.Control.EndIf
+		' If setup is verified, then continue.
+		
+		
+		' If called from the Update screen Script 1 button hook, then print out the good quantity ticket. Do not print out any scrap tickets.
+		' Note: If there are multiple jobs being updated, then this hook/script only runs once, but the following loop will print all the jobs' tickets.
+		F.Intrinsic.Control.If(V.Caller.Hook, =, "50610")
+			
+			' BDF columns:
+			'	0	JobString			Ex. 123456-123
+			'	1	Sequence			Ex.	001000
+			'	2	Workcenter
+			'	3	GoodPieces
+			'	4	ScrapPieces
+			'	5	Transfer
+			'	6	TransferBin
+			'	7	Close				Ex. Checked, True, Unchecked, False
+			'	8	Leave
+			'	9	TransferWIPToFG
+			'	10	QuantityToTransfer
+			'	11	ChargeTimeAsSetup
+			'	12	Comments			
+			'	13	LotToLotTracking
+			
+			F.Intrinsic.BDF.Load("GAB-BDF", "UpdateJobsView-gvWOOperations-bdf")
+			
+			F.Intrinsic.BDF.ReadRowCount("GAB-BDF", V.Local.iRows)
+			F.Intrinsic.Math.Sub(V.Local.iRows, 1, V.Local.iRows)
+			F.Intrinsic.Control.For(V.Local.i, 0, V.Local.iRows, 1)
+				
+				F.Intrinsic.BDF.ReadRow("GAB-BDF", V.Local.i, V.Local.sReturn)
+				F.Intrinsic.String.Split(V.Local.sReturn, "|~|", V.Local.sReturn)
+				
+				' TODO: figure out a better way than having some variables Global and some passed via CallSub
+				F.Intrinsic.String.Split(V.Local.sReturn(0), "-", V.Local.sReturn2)
+				V.Global.sJob.Set(V.Local.sReturn2(0))
+				V.Global.sSuffix.Set(V.Local.sReturn2(1))
+				V.Global.sSeq.Set(V.Local.sReturn(1))
+				V.Global.sQty.Set(V.Local.sReturn(3))
+				
+				' Process the passed close flag.
+				V.Local.sClosed.Set("N")
+				F.Intrinsic.Control.If(V.Local.sReturn(7), = , "True", OR, V.Local.sReturn(7), =, "Checked")
+					V.Local.sClosed.Set("Y")
+				F.Intrinsic.Control.ElseIf(V.Local.sReturn(7), = , "False", OR, V.Local.sReturn(7), =, "Unchecked")
+					V.Local.sClosed.Set("N")
+				F.Intrinsic.Control.EndIf
+				
+				' Process the passed comments.
+				F.Intrinsic.String.Replace(V.Local.sReturn(12), "<CRLF>", " ", V.Local.sComments)
+				
+				' Clear temp table of previous ticket data.
+				F.Intrinsic.String.Build("DELETE FROM GCG_7470_mv_tckt_lbl WHERE trmnl = '{0}' ", V.Caller.Terminal, V.Local.sQuery)
+				F.ODBC.Connection!Con.Execute(V.Local.sQuery)
+				
+				' Send a blank string for sQualitynbr because the Quality Number gets pulled straight from the DB later anyways, so the value being sent does not matter.
+				' 	Hook 50610 currently does not pass the QualityNumber anyways.
+				' Send a 0 for ScrapRef because this is what the old SFDC did in this case; It always sent 0s for the ScrapRef because it doesn't exist at that point. 
+				'	PrintTicket will end up not printing any scrap tickets anyways.
+				'	Future refactoring may find a better way than this roundabout send-0-then-check-for-0-to-cancel-scrap-print.
+				F.Intrinsic.Control.CallSub(PrintTicket, "sScrapQty", V.Local.sReturn(4), "sEmployee", V.Passed.EmployeeName, "sWC", V.Local.sReturn(2), "sQualitynbr", "", "sCloseflag", V.Local.sClosed, "sComments", V.Local.sComments, "sScrapRef", "0")
+				
+			F.Intrinsic.Control.Next(V.Local.i)
+			
+		F.Intrinsic.Control.EndIf
+
+		
+		' TODO: there is currently an issue with printing scrap tickets for multiple jobs via 50621.
+		'	all the jobs' scrap data are saved with the exact same SCRAP_REF
+		'	the print sub finds all the matches and prints all the rows for each job
+		'	Ex. job1 with scrap1 and scrap2. job2 with scrap3 and scrap4. tickets printed: scrap1, scrap2, scrap1, scrap2, scrap3, scrap4.
+		'
+		'	Update 3/26: Tested Stephanie's new version (suspended issue 51658) and it seems to work like old SFDC and things print out as expected.
+		'	Need to wait for that version of SFDC to release or somehow test this project with that other issue's files...
+		
+		' If called from the Update screen Process (OK) button hook, then print out the good quantity ticket and also any scrap tickets.
+		' Note: If there are multiple jobs being updated, then this hook/script would run multiple times, once for each job to print its tickets.
+		F.Intrinsic.Control.If(V.Caller.Hook, =, "50621")
+			
+			' TODO: figure out a better way than having some variables Global and some passed via CallSub
+			V.Global.sJob.Set(V.Passed.TXT-JOB)
+			V.Global.sSuffix.Set(V.Passed.TXT-SUFFIX)
+			V.Global.sSeq.Set(V.Passed.TXT-SEQ)
+			V.Global.sQty.Set(V.Passed.GOOD-PIECES)
+			
+			' Process the passed CHK-CLOSE-OPERATION.
+			V.Local.sClosed.Set("N")
+			F.Intrinsic.Control.If(V.Passed.CHK-CLOSE-OPERATION, =, "True")
+				V.Local.sClosed.Set("Y")
+			F.Intrinsic.Control.ElseIf(V.Passed.CHK-CLOSE-OPERATION, =, "False")
+				V.Local.sClosed.Set("N")
+			F.Intrinsic.Control.EndIf
+			
+			' Process the passed COMMENTS.
+			F.Intrinsic.String.Replace(V.Passed.COMMENTS, "<CRLF>", " ", V.Local.sComments)
+			
+			' Clear temp table of previous ticket data.
+			F.Intrinsic.String.Build("DELETE FROM GCG_7470_mv_tckt_lbl WHERE trmnl = '{0}' ", V.Caller.Terminal, V.Local.sQuery)
+			F.ODBC.Connection!Con.Execute(V.Local.sQuery)
+			
+			' Send a blank string for sQualitynbr because the Quality Number gets pulled straight from the DB later anyways, so the value being sent does not matter.
+			' Also, hook 50621 currently does not pass the QualityNumber.
+			F.Intrinsic.Control.CallSub(PrintTicket, "sScrapQty", V.Passed.SCRAP-PIECES, "sEmployee", V.Passed.EmployeeName, "sWC", V.Passed.WC, "sQualitynbr", "", "sCloseflag", V.Local.sClosed, "sComments", V.Local.sComments, "sScrapRef", V.Passed.SCRAP-REF)
+			
+		F.Intrinsic.Control.EndIf
+		
+		
+		' If called from Labor Schedule Maintenance screen Process (OK) button hook, then print out the good quantity (Actual Cuts) ticket for each job listed.
+		F.Intrinsic.Control.If(V.Caller.Hook, =, "48615")
+			
+			' BDF columns:
+			'	0	JobString			Ex. 123456
+			'	1	Suffix				Ex. 123?
+			'	2	Seqeuence			Ex.	001000
+			'	3	Line				Ex. 2
+			'	4	Tag					Ex. blank
+			'	5	Dimension1			Ex. 0
+			'	6	Dimension2			Ex. 0
+			'	7	Dimension3			Ex. 0	
+			'	8	RequiredPieces		Ex. 0
+			'	9	ActualCuts			Ex. 1
+			'	10	Refactor			Ex. 1.0000
+			'	11	Re-Cuts				Ex. 1
+			'	12	Closed				Ex. Y or blank
+			
+			F.Intrinsic.BDF.Load("GAB-BDF", "LaborScheduleMaintenanceView-gvLaborMaintenance-bdf")
+			
+			F.Intrinsic.BDF.ReadRowCount("GAB-BDF", V.Local.iRows)
+			F.Intrinsic.Math.Sub(V.Local.iRows, 1, V.Local.iRows)
+			F.Intrinsic.Control.For(V.Local.i, 0, V.Local.iRows, 1)
+			
+				F.Intrinsic.BDF.ReadRow("GAB-BDF", V.Local.i, V.Local.sReturn)
+				F.Intrinsic.String.Split(V.Local.sReturn, "|~|", V.Local.sReturn)
+				
+				' TODO: figure out a better way than having some variables Global and some passed via CallSub
+				V.Global.sJob.Set(V.Local.sReturn(0))
+				V.Global.sSuffix.Set(V.Local.sReturn(1))
+				V.Global.sSeq.Set(V.Local.sReturn(2))
+				
+				' Use the above JSS to find the related JSS that is the first labor sequence after this one. Print that sequence instead.
+				F.Intrinsic.String.LPad(V.Global.sSeq, 0, 6, V.Global.sSeq)
+				F.Intrinsic.String.Build("SELECT seq FROM v_job_operations WHERE job = '{0}' AND suffix = '{1}' AND seq > '{2}' AND lmo <> 'C' AND lmo <> 'M' AND task_seq <> 'T' ORDER BY seq;", V.Global.sJob, V.Global.sSuffix, V.Global.sSeq, V.Global.sSQL)
+				F.ODBC.Connection!Con.OpenRecordsetRO("rstSel", V.global.sSQL)
+				F.Intrinsic.Control.If(V.ODBC.Con!rstSel.EOF, =, False)
+					V.Global.sSeq.Set(V.ODBC.Con!rstSel.FieldValTrim!SEQ)
+				F.Intrinsic.Control.EndIf
+				F.ODBC.Con!rstSel.Close()
+		
+				F.Intrinsic.Control.If(V.Local.sReturn(9), <>, "")
+					V.Global.sQty.Set(V.Local.sReturn(9))
+				F.Intrinsic.Control.EndIf
+				
+				' Send 0 for ScrapQty because this hook does not involve scrap.
+				' Send blank for sQualitynbr. No ScrapQty anyways -> no scrap tickets -> QualityNbr value does not matter.
+				' Send 0 for ScrapRef. No ScrapQty anyways -> no scrap tickets -> ScrapRef value does not matter.
+				F.Intrinsic.Control.CallSub(PrintTicket, "sScrapQty", ".000000", "sEmployee", V.Passed.EmployeeName, "sWC", V.Passed.LaborScheduleMaintenanceView-txtWorkCenter, "sQualitynbr", "", "sCloseflag", "", "sComments", "", "sScrapRef", "0")
+				
+			Function.Intrinsic.Control.Next(V.Local.i)
+			
+		F.Intrinsic.Control.EndIf
+		
+		
+		F.Intrinsic.Control.CallSub(Unload)
+	
+	F.Intrinsic.Control.Catch
+	
+		F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}{1}{1}GAB Version: {5}", V.Ambient.ScriptPath, V.Ambient.Newline, V.Ambient.CurrentSubroutine, V.Ambient.ErrorNumber, V.Ambient.ErrorDescription, V.Ambient.GABVersion, V.Global.sError)
+		F.Intrinsic.UI.Msgbox(V.Global.sError)
+		F.Intrinsic.Control.CallSub(Unload)
+	
+	F.Intrinsic.Control.EndTry
+
+Program.Sub.Main.End
+
+' TODO: refactor this sub if time allows. everything else has been refactored.
+Program.Sub.PrintTicket.Start
+F.Intrinsic.Control.SetErrorHandler("PrintTicket_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+V.Local.sScrapQty.Declare(String)
+V.Local.sCurPart.Declare(String)
+V.Local.sCurDescr.Declare(String)
+V.Local.sQtyCompleted.Declare(Float)
+V.Local.sNextSeq.Declare(String)
+V.Local.sNextPart.Declare(String)
+V.Local.sNextDescr.Declare(String)
+V.Local.sLMO.Declare(String)
+V.Local.sNext_DateStart.Declare(String)
+V.Local.sNext_DateDue.Declare(String)
+V.Local.sPart.Declare(String)
+V.Local.sCust.Declare(String)
+V.Local.sWOPriority.Declare(String)
+V.Local.sPartDescr.Declare(String)
+V.Local.sWOQty.Declare(String)
+V.Local.sWOCustQty.Declare(String)
+V.Local.sWODateDue.Declare(String)
+V.Local.sName.Declare(String)
+V.Local.sEmployee.Declare(String)
+V.Local.sScrapCode.Declare(String)
+V.Local.sScrapDescription.Declare(String)
+V.Local.sParentJob.Declare(String)
+V.Local.sParentSuffix.Declare(String)
+V.Local.sParentPart.Declare(String)
+V.Local.sParentDescr.Declare(String)
+V.Local.sTopParentJob.Declare(String)
+V.Local.sTopParentSuffix.Declare(String)
+V.Local.sTopParentPart.Declare(String)
+V.Local.sTopParentDescr.Declare(String)
+V.Local.sParentInitWC.Declare(String)
+V.Local.sWC.Declare(String)
+V.Local.sQualitynbr.Declare(String)
+V.Local.sCloseflag.Declare(String)
+V.Local.sComments.Declare(String)
+V.Local.sRptLoc.Declare(String)
+V.Local.iRptID.Declare(Long)
+V.Local.sTPrinter.Declare(String)
+V.Local.sScrapPrinter.Declare(String)
+V.Local.sScrapFlag.Declare(String)
+V.Local.sParams.Declare(String)
+V.Local.sValues.Declare(String)
+V.Local.sScrapRef.Declare(String)
+V.Local.dNext_DateStart.Declare(Date)
+V.Local.dNext_DateDue.Declare(Date)
+v.Local.iRet.Declare(Long)
+
+V.Local.sScrapQty.Set(V.Args.sScrapQty)
+V.Local.sEmployee.Set(V.Args.sEmployee)
+V.Local.sWC.Set(V.Args.sWC)
+V.Local.sQualitynbr.Set(V.Args.sQualitynbr)
+V.Local.sCloseflag.Set(V.Args.sCloseflag)
+V.Local.sComments.Set(V.Args.sComments)
+V.Local.sScrapRef.Set(V.Args.sScrapRef)
+
+'if good pieces is 0 then don't continue
+'F.Intrinsic.Control.If(V.Global.sQty,=,".000000","AND",V.Local.sscrapqty,=,".000000")
+F.Intrinsic.Control.If(V.Global.sQty.Float,<=,0,"AND",V.Local.sscrapqty.Float,<=,0)
+	'exit sub as this could be called in a loop from the main..
+	Function.Intrinsic.Control.ExitSub	
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.String.Build("SELECT PART, DESCRIPTION, UNITS_COMPLETE FROM V_JOB_OPERATIONS WHERE JOB = '{0}' AND SUFFIX = '{1}' AND SEQ = '{2}' ",V.Global.sjob,V.Global.sSuffix,V.Global.sSeq,V.Global.sSQL)
+F.ODBC.Connection!Con.OpenRecordsetRO("rstSel",V.Global.sSQL)
+F.Intrinsic.Control.If(V.ODBC.Con!rstSel.EOF,=,False)
+	V.Local.sCurPart.Set(V.ODBC.Con!rstSel.FieldValTrim!PART)
+	V.Local.sCurDescr.Set(V.ODBC.Con!rstSel.FieldValTrim!DESCRIPTION)
+	V.Local.sQtyCompleted.Set(V.ODBC.Con!rstSel.FieldValTrim!UNITS_COMPLETE)
+F.Intrinsic.Control.EndIf
+F.ODBC.Con!rstSel.Close
+
+F.Intrinsic.String.Build("SELECT SEQ, PART, DESCRIPTION, LMO, DATE_START, DATE_DUE, UNITS_COMPLETE FROM V_JOB_OPERATIONS WHERE JOB = '{0}' AND SUFFIX = '{1}' AND SEQ > '{2}' AND LMO <> 'C' AND LMO <> 'M' AND TASK_SEQ <> 'T' ORDER BY SEQ ",V.Global.sJob,V.Global.sSuffix,V.Global.sSeq,V.Global.sSQL)
+F.ODBC.Connection!Con.OpenRecordsetRO("rstSel",V.Global.sSQL)
+F.Intrinsic.Control.If(V.ODBC.Con!rstSel.EOF,=,False)
+	V.Local.sNextSeq.Set(V.ODBC.Con!rstSel.FieldValTrim!SEQ)
+	V.Local.sNextPart.Set(V.ODBC.Con!rstSel.FieldValTrim!PART)
+	V.Local.sNextDescr.Set(V.ODBC.Con!rstSel.FieldValTrim!DESCRIPTION)
+	V.Local.sLMO.Set(V.ODBC.Con!rstSel.FieldValTrim!LMO)
+'	V.Local.sNext_DateStart.Set(V.ODBC.Con!rstSel.FieldValTrim!DATE_START)
+'	V.Local.sNext_DateDue.Set(V.ODBC.Con!rstSel.FieldValTrim!DATE_DUE)
+	V.Local.dNext_DateStart.Set(V.ODBC.Con!rstSel.FieldVal!DATE_START)
+	V.Local.dNext_DateDue.Set(V.ODBC.Con!rstSel.FieldVal!DATE_DUE)
+F.Intrinsic.Control.Else
+	F.Intrinsic.Date.ConvertDString("01/01/1900","mm/dd/yyyy",V.Local.dNext_DateStart)
+	F.Intrinsic.Date.ConvertDString("01/01/1900","mm/dd/yyyy",V.Local.dNext_DateDue)
+F.Intrinsic.Control.EndIf
+F.ODBC.Con!rstSel.Close
+
+F.Intrinsic.String.Build("SELECT PART, CUSTOMER, PRIORITY, PART_DESCRIPTION,QTY_ORDER, QTY_CUSTOMER, DATE_DUE FROM V_JOB_HEADER WHERE JOB = '{0}' AND SUFFIX = '{1}' ",V.Global.sJob,V.Global.sSuffix,V.Global.sSQL)
+F.ODBC.Connection!Con.OpenRecordsetRO("rstSel",V.global.sSQL)
+F.Intrinsic.Control.If(V.ODBC.Con!rstSel.EOF,=,False)
+	V.Local.sPart.Set(V.ODBC.Con!rstSel.FieldValTrim!PART)
+	V.Local.sCust.Set(V.ODBC.Con!rstSel.FieldValTrim!CUSTOMER)
+	V.Local.sWOPriority.Set(V.ODBC.Con!rstSel.FieldValTrim!PRIORITY)
+	V.Local.sPartDescr.Set(V.ODBC.Con!rstSel.FieldValTrim!PART_DESCRIPTION)
+	V.Local.sWOQty.Set(V.ODBC.Con!rstSel.FieldValTrim!QTY_ORDER)
+	V.Local.sWOCustQty.Set(V.ODBC.Con!rstSel.FieldValTrim!QTY_CUSTOMER)
+	V.Local.sWODateDue.Set(V.ODBC.Con!rstSel.FieldValTrim!DATE_DUE)
+F.Intrinsic.Control.EndIf
+F.ODBC.Con!rstSel.Close
+
+F.Intrinsic.String.Build("SELECT NAME_CUSTOMER FROM V_CUSTOMER_MASTER WHERE CUSTOMER = '{0}' ",V.Local.sCust.PSQLFriendly,V.Global.sSQL)
+F.ODBC.Connection!Con.OpenRecordsetRO("rstSel",V.global.sSQL)
+F.Intrinsic.Control.If(V.ODBC.Con!rstSel.EOF,=,False)
+	V.Local.sName.Set(V.ODBC.Con!rstSel.FieldValTrim!NAME_CUSTOMER)
+F.Intrinsic.Control.EndIf
+F.ODBC.Con!rstSel.Close
+
+F.Intrinsic.String.Build("SELECT SCRAP_REASON FROM V_JOBS_IN_PROCESS WHERE JOB = '{0}' AND SUFFIX = '{1}' AND SEQUENCE = '{2}' AND EMPLOYEE_NAME = '{3}' ORDER BY SEQUENCE_KEY DESC ",V.Global.sJob,V.Global.sSuffix,V.Global.sSeq,V.Local.sEmployee.PSQLFriendly,V.Global.sSQL)
+F.ODBC.Connection!Con.OpenRecordsetRO("rstSel",V.global.sSQL)
+F.Intrinsic.Control.If(V.ODBC.Con!rstSel.EOF,=,False)
+	V.Local.sScrapCode.Set(V.ODBC.Con!rstSel.FieldValTrim!SCRAP_REASON)
+	F.Intrinsic.String.Build("SELECT SCRAP_CODE_DESC FROM V_RJCT_SCRP_CODES WHERE SCRAP_CODE = '{0}' ",V.Local.sScrapCode,V.Global.sSQL)
+	F.ODBC.Connection!Con.OpenRecordsetRO("rstSelA",V.global.sSQL)
+	F.Intrinsic.Control.If(V.ODBC.Con!rstSelA.EOF,=,False)
+		V.Local.sScrapDescription.Set(V.ODBC.Con!rstSelA.FieldValTrim!SCRAP_CODE_DESC)
+	F.Intrinsic.Control.EndIf
+	F.ODBC.Con!rstSelA.Close
+F.Intrinsic.Control.EndIf
+F.ODBC.Con!rstSel.Close
+
+F.Intrinsic.String.Build("SELECT PARENT_WO, PARENT_SUFFIX_PARENT FROM V_JOB_HEADER WHERE JOB = '{0}' AND SUFFIX = '{1}' ",V.Global.sJob,V.Global.sSuffix,V.Global.sSQL)
+F.ODBC.Connection!Con.OpenRecordsetRO("rstSel",V.global.sSQL)
+F.Intrinsic.Control.If(V.ODBC.Con!rstSel.EOF,=,False)
+	V.Local.sParentJob.Set(V.ODBC.Con!rstSel.FieldValTrim!Parent_WO)
+	V.Local.sParentSuffix.Set(V.ODBC.Con!rstSel.FieldValTrim!Parent_Suffix_Parent)
+	F.Intrinsic.String.Build("SELECT PART, PART_DESCRIPTION FROM V_JOB_HEADER WHERE JOB = '{0}' AND SUFFIX = '{1}' ",V.Local.sParentJob,V.Local.sParentSuffix,V.Global.sSQL)
+	F.ODBC.Connection!Con.OpenRecordsetRO("rstSelA",V.global.sSQL)
+	F.Intrinsic.Control.If(V.ODBC.Con!rstSelA.EOF,=,False)
+		V.Local.sParentPart.Set(V.ODBC.Con!rstSelA.FieldValTrim!Part)
+		V.Local.sParentDescr.Set(V.ODBC.Con!rstSelA.FieldValTrim!Part_Description)
+	F.Intrinsic.Control.EndIf
+	F.ODBC.Con!rstSelA.Close
+F.Intrinsic.Control.EndIf
+F.ODBC.Con!rstSel.Close
+
+F.Intrinsic.String.Build("SELECT JOB, SUFFIX, PART, PART_DESCRIPTION FROM V_JOB_HEADER WHERE JOB = '{0}' AND SUFFIX = '000' ",V.Global.sJob,V.Global.sSQL)
+F.ODBC.Connection!Con.OpenRecordsetRO("rstSel",V.global.sSQL)
+F.Intrinsic.Control.If(V.ODBC.Con!rstSel.EOF,=,False)
+	V.Local.sTopParentJob.Set(V.ODBC.Con!rstSel.FieldValTrim!Job)
+	V.Local.sTopParentSuffix.Set(V.ODBC.Con!rstSel.FieldValTrim!Suffix)
+	V.Local.sTopParentPart.Set(V.ODBC.Con!rstSel.FieldValTrim!Part)
+	V.Local.sTopParentDescr.Set(V.ODBC.Con!rstSel.FieldValTrim!Part_Description)
+F.Intrinsic.Control.EndIf
+F.ODBC.Con!rstSel.Close
+
+F.Intrinsic.String.Build("SELECT PART FROM V_JOB_OPERATIONS WHERE JOB = '{0}' AND SUFFIX = '{1}' AND LMO = 'L' ORDER BY SEQ ",V.Local.sParentJob,V.Local.sParentSuffix,V.Global.sSQL)
+F.ODBC.Connection!Con.OpenRecordsetRO("rstSel",V.global.sSQL)
+F.Intrinsic.Control.If(V.ODBC.Con!rstSel.EOF,=,False)
+	V.Local.sParentInitWC.Set(V.ODBC.Con!rstSel.FieldValTrim!PART)
+F.Intrinsic.Control.EndIf
+F.ODBC.Con!rstSel.Close
+
+F.Intrinsic.String.Build("SELECT * FROM GCG_7470_mv_tckt_lbl WHERE TRMNL = '{0}' ",V.Caller.Terminal,V.Global.sSQL)
+F.ODBC.Connection!Con.OpenRecordsetRW("rstSel",V.global.sSQL)
+F.ODBC.Con!rstSel.AddNew
+F.ODBC.Con!rstSel.Set!TRMNL(V.Caller.Terminal)
+F.ODBC.Con!rstSel.Set!JOB(V.global.sJob)
+F.ODBC.Con!rstSel.Set!SUFFIX(V.global.sSuffix)
+F.ODBC.Con!rstSel.Set!CUR_SEQ(V.global.sSeq)
+F.ODBC.Con!rstSel.Set!CUR_PART(V.Local.sCurPart)
+F.ODBC.Con!rstSel.Set!CUR_DESCR(V.Local.sCurDescr)
+F.ODBC.Con!rstSel.Set!LMO(V.Local.sLMO)
+F.ODBC.Con!rstSel.Set!QTY(V.global.sQty)
+F.ODBC.Con!rstSel.Set!WORKCENTER(V.Local.sWC)
+F.ODBC.Con!rstSel.Set!EMPLOYEE(V.Local.sEmployee)
+F.ODBC.Con!rstSel.Set!QUALITY_NO(V.Local.sQualitynbr)
+F.ODBC.Con!rstSel.Set!SCRAP_CODE(V.Local.sScrapCode)
+F.ODBC.Con!rstSel.Set!SCRAP_CODE_DESC(V.Local.sScrapDescription)
+F.ODBC.Con!rstSel.Set!SCRAP_QTY(V.Local.sScrapqty)
+F.ODBC.Con!rstSel.Set!CLOSE_FLAG(V.Local.sCloseflag)
+F.ODBC.Con!rstSel.Set!PART(V.Local.sPart)
+F.ODBC.Con!rstSel.Set!CUSTOMER(V.Local.sCust)
+F.ODBC.Con!rstSel.Set!NAME(V.Local.sName)
+F.ODBC.Con!rstSel.Set!NEXT_SEQ(V.Local.sNextSeq)
+F.ODBC.Con!rstSel.Set!NEXT_PART(V.Local.sNextPart)
+F.ODBC.Con!rstSel.Set!NEXT_DESCR(V.Local.sNextDescr)
+F.ODBC.Con!rstSel.Set!Parent_Job(V.Local.sParentJob)
+F.ODBC.Con!rstSel.Set!Parent_Suffix(V.Local.sParentSuffix)
+F.ODBC.Con!rstSel.Set!Parent_Part(V.Local.sParentPart)
+F.ODBC.Con!rstSel.Set!Parent_Descr(V.Local.sParentDescr)
+F.ODBC.Con!rstSel.Set!Top_Parent_Job(V.Local.sTopParentJob)
+F.ODBC.Con!rstSel.Set!Top_Parent_Suffix(V.Local.sTopParentSuffix)
+F.ODBC.Con!rstSel.Set!Top_Parent_Part(V.Local.sTopParentPart)
+F.ODBC.Con!rstSel.Set!Top_Parent_Descr(V.Local.sTopParentDescr)
+F.ODBC.Con!rstSel.Set!QUALITY_NO(V.Local.sQualitynbr)
+'F.ODBC.Con!rstSel.Set!NEXT_SEQ_START(V.Local.sNext_DateStart)
+'F.ODBC.Con!rstSel.Set!NEXT_SEQ_DUE(V.Local.sNext_DateDue)
+F.ODBC.Con!rstSel.Set!NEXT_SEQ_START(V.Local.dNext_DateStart.PervasiveDate)
+F.ODBC.Con!rstSel.Set!NEXT_SEQ_DUE(V.Local.dNext_DateDue.PervasiveDate)
+F.ODBC.Con!rstSel.Set!WO_PRIORITY(V.Local.sWOPriority)
+F.ODBC.Con!rstSel.Set!PART_DESCR(V.Local.sPartDescr)
+F.ODBC.Con!rstSel.Set!WO_QTY(V.Local.sWOQty)
+F.ODBC.Con!rstSel.Set!WO_CUSTOMER_QTY(V.Local.sWOCustQty)
+F.ODBC.Con!rstSel.Set!WO_DUE_DATE(V.Local.sWODateDue)
+F.ODBC.Con!rstSel.Set!QTY_COMPLETED(V.Local.sQtyCompleted)
+F.ODBC.Con!rstSel.Set!Parent_InitWC(V.Local.sParentInitWC)
+F.ODBC.Con!rstSel.Set!Comments(V.Local.sComments)
+F.ODBC.Con!rstSel.Update
+F.ODBC.Con!rstSel.Close
+
+'VT George Sandoval 27 Feb 2024 - Modified the Crystal report to bring in the part weight so we need to modify the report here in the preproc to grab the modified version
+'F.Intrinsic.String.Build("{0}\Custom\PPT_5918_MoveTicketLabel.rpt",V.Caller.BusintDir,V.Local.sRptLoc)
+F.Intrinsic.String.Build("{0}\Custom\GCG_7470_MoveTicketLabel.rpt",V.Caller.BusintDir,V.Local.sRptLoc)
+F.Global.BI.InitializeReport("GCG_7470_MoveTicketLabel_CAL",V.Local.sRptLoc,V.Local.iRptID)
+
+F.Intrinsic.String.Build("SELECT PRINTER, SCRAPPRINTER FROM GCG_7470_mv_tckt_su WHERE TRMNL = '{0}' ",V.Caller.Terminal,V.Global.sSQL)
+F.ODBC.Connection!Con.OpenRecordsetRO("rstSel",V.Global.sSQL)
+F.Intrinsic.Control.If(V.ODBC.Con!rstSel.EOF,=,False)
+	V.Local.sTPrinter.Set(V.ODBC.Con!rstSel.FieldValTrim!Printer)
+	F.Intrinsic.Control.If(V.ODBC.Con!rstSel.FieldValTrim!ScrapPrinter,=,"")
+		V.Local.sScrapPrinter.Set(V.Local.sTPrinter)
+	F.Intrinsic.Control.Else
+		V.Local.sScrapPrinter.Set(V.ODBC.Con!rstSel.FieldValTrim!ScrapPrinter)
+	F.Intrinsic.Control.EndIf
+F.Intrinsic.Control.EndIf
+
+'F.Intrinsic.Control.If(V.global.sQty,<>,".000000")
+F.Intrinsic.Control.If(V.Global.sQty.Float,>,0)
+	
+	V.Local.sScrapflag.Set("N")
+	
+	
+
+	'f.Global.BI.GetRunID(v.Global.iBIRunID)
+	'f.Global.BI.StartLogging(v.Global.iBIRunID,v.Local.iRptID,0,"",v.Global.iLogID)
+	'v.Local.sParams.Set("TRMNL*!*Job*!*Suffix*!*Scrapflag")
+	'F.Intrinsic.String.Build("{0}*!*{1}*!*{2}*!*{3}*!*{4}",V.Caller.Terminal,V.Global.sJob,V.Global.sSuffix,V.Local.sScrapflag,V.Local.sValues)
+	'f.Global.BI.StopLogging(v.Global.iLogID)
+	'f.Global.BI.RunReportPreProcessor(v.Global.iBIRunID,v.Global.iLogID,v.Local.sParams,v.Local.sValues,v.Local.iRptID,8,False,"",1,v.Local.sTPrinter,-1,"","",v.Local.iRet)
+	
+	
+	
+	' Comment out the following block and uncomment the above block to do things the way it did when this project was Certified (Jul 2017 ish).
+	' Apr 2019: PrintReport is brought back from the older version. Note the True for the isSynchronous argument. This combined with setting the 15881 hook sequence to synchronous should resolve the issue where multiple tickets were not printing as expected when processing multiple quantity changes at once.
+	F.Intrinsic.String.Split("TRMNL*!*Job*!*Suffix*!*Scrapflag","*!*",V.Local.sParams)
+	F.Intrinsic.String.Build("{0}*!*{1}*!*{2}*!*{3}*!*{4}",V.Caller.Terminal,V.Global.sJob,V.Global.sSuffix,V.Local.sScrapflag,V.Local.sValues)
+	F.Intrinsic.String.Split(V.Local.sValues,"*!*",V.Local.sValues)
+	F.Global.BI.PrintReport(V.Local.iRptID,3,V.Local.sParams,V.Local.sValues,V.Local.sTPrinter,True)
+	F.Intrinsic.Control.CallSub(SendEmail)
+	
+	
+F.Intrinsic.Control.Endif
+F.ODBC.Con!rstSel.Close
+
+' Scrap Printer added as optional quantentine label printer when scrap labels printed on colored label stock
+'F.Intrinsic.Control.If(V.Local.sScrapQty,<>,".000000")
+
+' SCRAP-REF = 0 if the user presses the Script 1 button on the processing screen.
+'	If it is 0 and there was a scrap qty that will be processed later, it would try to go in here and incorrectly print out all the 0 SCRAP_REF rows.
+'	This check prevents that.
+'	Not sure if AND for If statements works in runtime 1, so just addding it as another nested If.
+F.Intrinsic.Control.If(V.Local.sScrapRef.Float,>,0)
+F.Intrinsic.Control.If(V.Local.sscrapqty.Float,>,0)
+
+	V.Local.sScrapflag.Set("Y")
+
+	'Scrap - loop through scrap_data table by scrap_ref = sscrapref
+
+	F.Intrinsic.String.Build("SELECT SCRAP_REF, QUALITY, REASON_CODE, QTY FROM SCRAP_DATA WHERE SCRAP_REF = '{0}' ",V.Local.sScrapRef,V.Global.sSQL)
+	F.ODBC.Connection!Con.OpenRecordsetRO("rstSel",V.global.sSQL)
+
+	Function.Intrinsic.Control.DoUntil(V.odbc.Con!rstSel.eof,=,True)
+
+		V.Local.sQualitynbr.Set(V.ODBC.Con!rstSel.FieldValTrim!Quality)
+		V.Local.sScrapQty.Set(V.ODBC.Con!rstSel.FieldValTrim!QTY)
+		V.Local.sScrapCode.Set(V.ODBC.Con!rstSel.FieldValTrim!Reason_Code)
+
+		F.Intrinsic.String.Build("SELECT SCRAP_CODE_DESC FROM V_RJCT_SCRP_CODES WHERE SCRAP_CODE = '{0}' ",V.Local.sScrapCode,V.Global.sSQL)
+		F.ODBC.Connection!Con.OpenRecordsetRO("rstSelA",V.global.sSQL)
+		F.Intrinsic.Control.If(V.ODBC.Con!rstSelA.EOF,=,False)
+			V.Local.sScrapDescription.Set(V.ODBC.Con!rstSelA.FieldValTrim!SCRAP_CODE_DESC)
+		F.Intrinsic.Control.EndIf
+		F.ODBC.Con!rstSelA.Close
+
+		F.Intrinsic.String.Build("SELECT * FROM GCG_7470_mv_tckt_lbl WHERE TRMNL = '{0}' ",V.Caller.Terminal,V.Global.sSQL)
+		F.ODBC.Connection!Con.OpenRecordsetRW("rstSelB",V.global.sSQL)
+
+		F.ODBC.Con!rstSelB.Set!QUALITY_NO(V.Local.sQualitynbr)
+		F.ODBC.Con!rstSelB.Set!SCRAP_CODE(V.Local.sScrapCode)
+		F.ODBC.Con!rstSelB.Set!SCRAP_CODE_DESC(V.Local.sScrapDescription)
+		F.ODBC.Con!rstSelB.Set!SCRAP_QTY(V.Local.sscrapqty)
+		F.ODBC.Con!rstSelB.Update
+		F.ODBC.Con!rstSelB.Close
+
+
+		
+		'f.Global.BI.GetRunID(v.Global.iBIRunID)
+		'f.Global.BI.StartLogging(v.Global.iBIRunID,v.Local.iRptID,0,"",v.Global.iLogID)
+		'v.Local.sParams.Set("TRMNL*!*Job*!*Suffix*!*Scrapflag")
+		'F.Intrinsic.String.Build("{0}*!*{1}*!*{2}*!*{3}",V.Caller.Terminal,V.Global.sJob,V.Global.sSuffix,V.Local.sScrapflag,V.Local.sValues)
+		'f.Global.BI.StopLogging(v.Global.iLogID)
+		'f.Global.BI.RunReportPreProcessor(v.Global.iBIRunID,v.Global.iLogID,v.Local.sParams,v.Local.sValues,v.Local.iRptID,8,False,"",1,v.Local.sScrapPrinter,-1,"","",v.Local.iRet)
+		
+		
+		
+		' Similar to Apr 2019 changes above to the non-scrap quantity processing.
+		' Comment out the following block and uncomment the above block to do things the way it did when this project was Certified (Jul 2017 ish).
+		' Jun 2019: PrintReport is brought back from the older version. Note the True for the isSynchronous argument. This combined with setting the 15881 hook sequence to synchronous should resolve the issue where multiple tickets were not printing as expected when processing multiple quantity changes at once.
+		F.Intrinsic.String.Split("TRMNL*!*Job*!*Suffix*!*Scrapflag","*!*",V.Local.sParams)
+		F.Intrinsic.String.Build("{0}*!*{1}*!*{2}*!*{3}",V.Caller.Terminal,V.Global.sJob,V.Global.sSuffix,V.Local.sScrapflag,V.Local.sValues)
+		F.Intrinsic.String.Split(V.Local.sValues,"*!*",V.Local.sValues)
+		F.Global.BI.PrintReport(V.Local.iRptID,3,V.Local.sParams,V.Local.sValues,V.Local.sScrapPrinter,True)
+		
+		
+
+		F.ODBC.con!rstSel.MoveNext
+	Function.Intrinsic.Control.Loop
+	F.ODBC.Con!rstSel.Close
+
+F.Intrinsic.Control.Endif
+F.Intrinsic.Control.Endif
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("PrintTicket_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_7470_PrintMoveTicket.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.CallSub(Unload)
+Function.Intrinsic.Control.EndIf
+
+
+Program.Sub.PrintTicket.End
+
+Program.Sub.Unload.Start
+
+	F.Intrinsic.Control.Try
+	
+		F.ODBC.Connection!con.Close()
+		F.Intrinsic.Control.End()
+	
+	F.Intrinsic.Control.Catch
+	
+		F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}{1}{1}GAB Version: {5}", V.Ambient.ScriptPath, V.Ambient.Newline, V.Ambient.CurrentSubroutine, V.Ambient.ErrorNumber, V.Ambient.ErrorDescription, V.Ambient.GABVersion, V.Global.sError)
+		F.Intrinsic.UI.Msgbox(V.Global.sError)
+		F.Intrinsic.Control.End()
+		
+	F.Intrinsic.Control.EndTry
+	
+Program.Sub.Unload.End
+
+Program.Sub.SendEmail.Start
+V.Local.sError.Declare
+V.Local.iUserID.Declare
+V.Local.sBody.Declare
+V.Local.sSubject.Declare
+V.Local.sRecip.Declare
+V.Local.sSender.Declare
+V.Local.sSQL.Declare
+V.Local.sBodyHTML.Declare
+V.Local.sJob.Declare
+V.Local.sSuffix.Declare
+V.Local.sSeq.Declare
+F.Intrinsic.Control.Try
+'Get user id
+F.Global.Security.GetUserId(V.Caller.User,V.Caller.CompanyCode,V.Local.iUserID)
+
+F.ODBC.Connection!conx.OpenCompanyConnection
+'Get sender email from registry
+F.Global.Registry.ReadValue("SUPERVSR",V.Caller.CompanyCode,"Sender",7470,1000,5,"",V.Local.sSender)
+'Pull datatable info from custom table
+F.Intrinsic.String.Build("SELECT JOB, SUFFIX, CUR_SEQ, PART, WORKCENTER AS WC, CUR_DESCR AS DESCR, QTY, EMPLOYEE, NEXT_PART AS NEXT_WC, NEXT_DESCR from GCG_7470_MV_TCKT_LBL WHERE TRMNL = '{0}'",V.Caller.Terminal,V.Local.sSQL)
+F.Data.Datatable.CreateFromSQL("dtExport","conx",V.Local.sSQL,True)
+'Export body to html
+F.Data.Datatable.ExportHTML("dtExport",V.DataTable.dtExport.FieldNames,"Job*!*Suffix*!*Seq*!*Part*!*WC*!*Desc*!*Quantity*!*Employee*!*Next WC/Op*!*Next Desc","",False,V.Local.sBodyHTML)
+
+F.ODBC.Connection!conx.Close
+
+'Replace subject keywords
+V.Local.sJob.Set(V.DataTable.dtExport(0).JOB!Fieldval)
+V.Local.sSuffix.Set(V.DataTable.dtExport(0).SUFFIX!Fieldval)
+V.Local.sSeq.Set(V.DataTable.dtExport(0).CUR_SEQ!Fieldval)
+
+F.Data.Datatable.Close("dtExport")
+
+F.Intrinsic.String.Replace(V.Global.sSubject,"#JOB#",V.Local.sJob,V.Local.sSubject)
+F.Intrinsic.String.Replace(V.Local.sSubject,"#SUFFIX#",V.Local.sSuffix,V.Local.sSubject)
+F.Intrinsic.String.Replace(V.Local.sSubject,"#SEQ#",V.Local.sSeq,V.Local.sSubject)
+
+F.Intrinsic.String.Replace(V.Global.sBody,"#BODY#",V.Local.sBodyHTML,V.Local.sBody)
+
+'Get list of recipients
+F.ODBC.Connection!conx.OpenCompanyConnection
+F.ODBC.Connection!conx.ExecuteAndReturn("SELECT * FROM GCG_7470_EMAIL",V.Local.sRecip)
+F.Intrinsic.String.Replace(V.Local.sRecip,"#$#","@!@",V.Local.sRecip)
+F.ODBC.Connection!conx.Close
+
+'Send email
+F.Global.Messaging.QueueMessage(V.Caller.CompanyCode,V.Local.iUserID,"Move Ticket Printing (7470)",V.Local.sSubject,V.Local.sSender,V.Local.sRecip,"",5,"",False,"","","","","","","","","",V.Local.sBody)
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Line: {3}{1}Error Number: {4}{1}Description: {5}{1}{1}GAB Version: {6}",V.Caller.ScriptFile,V.Ambient.NewLine,V.Ambient.CurrentSubroutine,V.Ambient.ErrorLine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Ambient.GABVersion,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.End
+F.Intrinsic.Control.EndTry
+Program.Sub.SendEmail.End
+
+Program.Sub.Comments.Start
+${$5$}$2.0.0.0$}$2
+${$6$}$triley$}$20240311132914914$}$iK6nerqp9nur1h1iSBfRKBBz1ENCgYv6pXwxCmI1yUPl9MOR3i+iOClmR9TgUoW+GHDXarGoMwQ=
+Program.Sub.Comments.End
