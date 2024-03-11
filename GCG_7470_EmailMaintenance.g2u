@@ -1,0 +1,198 @@
+﻿Program.Sub.ScreenSU.Start
+Gui.Form..Create(BaseForm)
+Gui.Form..Caption("Move Ticket Email Maintenance (7470)")
+Gui.Form..Size(400,428)
+Gui.Form..MinX(0)
+Gui.Form..MinY(0)
+Gui.Form..Position(0,0)
+Gui.Form..AlwaysOnTop(False)
+Gui.Form..FontName("Tahoma")
+Gui.Form..FontSize(8.25)
+Gui.Form..ControlBox(True)
+Gui.Form..MaxButton(True)
+Gui.Form..MinButton(True)
+Gui.Form..MousePointer(0)
+Gui.Form..Moveable(True)
+Gui.Form..Sizeable(True)
+Gui.Form..ShowInTaskBar(True)
+Gui.Form..TitleBar(True)
+Gui.Form..Event(UnLoad,Form_UnLoad)
+Gui.Form.txtEmail.Create(TextBox,"",True,350,20,0,25,32,True,0,"Tahoma",8.25,,1)
+Gui.Form.txtEmail.Anchor(13)
+Gui.Form.cmdSave.Create(Button)
+Gui.Form.cmdSave.Enabled(True)
+Gui.Form.cmdSave.Visible(True)
+Gui.Form.cmdSave.Zorder(0)
+Gui.Form.cmdSave.Size(75,23)
+Gui.Form.cmdSave.Position(75,70)
+Gui.Form.cmdSave.Caption("Save")
+Gui.Form.cmdSave.FontName("Tahoma")
+Gui.Form.cmdSave.FontSize(8.25)
+Gui.Form.cmdSave.Event(Click,cmdSave_Click)
+Gui.Form.cmdDelete.Create(Button)
+Gui.Form.cmdDelete.Enabled(True)
+Gui.Form.cmdDelete.Visible(True)
+Gui.Form.cmdDelete.Zorder(0)
+Gui.Form.cmdDelete.Size(75,23)
+Gui.Form.cmdDelete.Position(250,69)
+Gui.Form.cmdDelete.Caption("Delete")
+Gui.Form.cmdDelete.FontName("Tahoma")
+Gui.Form.cmdDelete.FontSize(8.25)
+Gui.Form.cmdDelete.Event(Click,cmdDelete_Click)
+Gui.Form.lvwemail.Create(ListView)
+Gui.Form.lvwemail.Enabled(True)
+Gui.Form.lvwemail.Visible(True)
+Gui.Form.lvwemail.AddListViewColumn("Email",350,0)
+Gui.Form.lvwemail.Zorder(0)
+Gui.Form.lvwemail.Size(350,225)
+Gui.Form.lvwemail.Position(25,106)
+Gui.Form.lvwemail.FontName("Tahoma")
+Gui.Form.lvwemail.FontSize(8)
+Gui.Form.lvwemail.View(3)
+Gui.Form.lvwemail.Multiselect(False)
+Gui.Form.lvwemail.CheckBoxes(False)
+Gui.Form.lvwemail.Anchor(15)
+Gui.Form.lvwemail.Event(ItemClick,lvwemail_ItemClick)
+Gui.Form.lblRecip.Create(Label,"Recipient",True,44,13,0,32,13,True,0,"Tahoma",8.25,,0,0)
+Gui.Form.lblRecip.BorderStyle(0)
+Gui.Form.lblRecip.Anchor(13)
+Gui.Form.lblSend.Create(Label,"Sender",True,34,13,0,34,341,True,0,"Tahoma",8.25,,0,0)
+Gui.Form.lblSend.BorderStyle(0)
+Gui.Form.lblSend.Anchor(14)
+Gui.Form.txtSender.Create(TextBox,"",True,350,20,0,25,365,True,0,"Tahoma",8.25,,1)
+Gui.Form.txtSender.Anchor(14)
+Program.Sub.ScreenSU.End
+
+Program.Sub.Preflight.Start
+V.Global.sError.Declare
+V.Global.iOrd.Declare
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+Function.Intrinsic.UI.UsePixels ' Allows you to use Pixels instead of Twips throughout
+F.Intrinsic.Control.Try
+
+F.Intrinsic.Control.CallSub(FillListView)
+
+Gui.Form..Show
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Line: {3}{1}Error Number: {4}{1}Description: {5}{1}{1}GAB Version: {6}",V.Caller.ScriptFile,V.Ambient.NewLine,V.Ambient.CurrentSubroutine,V.Ambient.ErrorLine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Ambient.GABVersion,V.Global.sError)
+	F.Intrinsic.UI.Msgbox(V.Global.sError)
+	F.Intrinsic.Control.End
+F.Intrinsic.Control.EndTry
+Program.Sub.Main.End
+
+Program.Sub.cmdSave_Click.Start
+V.Local.sSQL.Declare
+V.Local.sRet.Declare
+F.Intrinsic.Control.Try
+F.ODBC.Connection!con.OpenCompanyConnection
+F.Intrinsic.Control.If(V.Screen.Form!txtSender.Text.Trim,<>,"")
+	F.Global.Registry.AddValue(V.Caller.User,V.Caller.CompanyCode,"Sender",7470,1000,False,V.Screen.Form!txtSender.Text.Trim,False,0,-1,V.Ambient.Date,12:00:00 AM)
+F.Intrinsic.Control.EndIf
+F.ODBC.Connection!con.Close
+
+F.Intrinsic.Control.If(V.Screen.Form!txtEmail.Text.Trim,<>,"")
+	F.ODBC.Connection!con.OpenCompanyConnection
+	F.Intrinsic.String.Build("SELECT * FROM GCG_7470_EMAIL WHERE RTRIM(EMAIL) = '{0}'",V.Screen.Form!txtEmail.Text.Trim,V.Local.sSQL)
+	
+	F.ODBC.Connection!con.ExecuteAndReturn(V.Local.sSQL,V.Local.sRet)
+	F.Intrinsic.Control.If(V.Local.sRet.Trim,=,"")
+		F.Intrinsic.String.Build("INSERT INTO GCG_7470_EMAIL VALUES ('{0}')",V.Screen.Form!txtEmail.Text.Trim,V.Local.sSQL)
+		F.ODBC.Connection!con.Execute(V.Local.sSQL)
+	F.Intrinsic.Control.EndIf
+	F.ODBC.Connection!con.Close
+	
+	Gui.Form.lvwemail.ClearItems
+	F.Intrinsic.Control.CallSub(FillListView)
+	Gui.Form.txtEmail.Text("")
+
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Line: {3}{1}Error Number: {4}{1}Description: {5}{1}{1}GAB Version: {6}",V.Caller.ScriptFile,V.Ambient.NewLine,V.Ambient.CurrentSubroutine,V.Ambient.ErrorLine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Ambient.GABVersion,V.Global.sError)
+	F.Intrinsic.UI.Msgbox(V.Global.sError)
+	F.Intrinsic.Control.End
+F.Intrinsic.Control.EndTry
+Program.Sub.cmdSave_Click.End
+
+Program.Sub.cmdDelete_Click.Start
+V.Local.sSQL.Declare
+V.Local.iIndex.Declare
+F.Intrinsic.Control.Try
+
+F.Intrinsic.String.Build("DELETE FROM GCG_7470_EMAIL WHERE RTRIM(EMAIL) = '{0}'",V.Screen.Form!txtEmail.Text.Trim,V.Local.sSQL)
+F.ODBC.Connection!con.OpenCompanyConnection
+F.ODBC.Connection!con.Execute(V.Local.sSQL)
+F.ODBC.Connection!con.Close
+Gui.Form.txtEmail.Text("")
+Gui.Form.lvwemail.ClearItems
+F.Intrinsic.Control.CallSub(FillListView)
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Line: {3}{1}Error Number: {4}{1}Description: {5}{1}{1}GAB Version: {6}",V.Caller.ScriptFile,V.Ambient.NewLine,V.Ambient.CurrentSubroutine,V.Ambient.ErrorLine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Ambient.GABVersion,V.Global.sError)
+	F.Intrinsic.UI.Msgbox(V.Global.sError)
+	F.Intrinsic.Control.End
+F.Intrinsic.Control.EndTry
+Program.Sub.cmdDelete_Click.End
+
+Program.Sub.Form_UnLoad.Start
+F.Intrinsic.Control.Try
+
+F.Intrinsic.Control.End
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Line: {3}{1}Error Number: {4}{1}Description: {5}{1}{1}GAB Version: {6}",V.Caller.ScriptFile,V.Ambient.NewLine,V.Ambient.CurrentSubroutine,V.Ambient.ErrorLine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Ambient.GABVersion,V.Global.sError)
+	F.Intrinsic.UI.Msgbox(V.Global.sError)
+	F.Intrinsic.Control.End
+F.Intrinsic.Control.EndTry
+Program.Sub.Form_UnLoad.End
+
+Program.Sub.lvwemail_ItemClick.Start
+V.Local.sText.Declare
+V.Local.sRet.Declare
+V.Local.iOrd.Declare
+F.Intrinsic.Control.Try
+
+Gui.Form.lvwemail.RetrieveSelectedListitems(V.Local.sText)
+
+Gui.Form.lvwemail.RetrieveItemOrdinal(V.Local.sText,V.Global.iOrd)
+
+Gui.Form.txtEmail.Text(V.Local.sText.Trim)
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Line: {3}{1}Error Number: {4}{1}Description: {5}{1}{1}GAB Version: {6}",V.Caller.ScriptFile,V.Ambient.NewLine,V.Ambient.CurrentSubroutine,V.Ambient.ErrorLine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Ambient.GABVersion,V.Global.sError)
+	F.Intrinsic.UI.Msgbox(V.Global.sError)
+	F.Intrinsic.Control.End
+F.Intrinsic.Control.EndTry
+Program.Sub.lvwemail_ItemClick.End
+
+Program.Sub.FillListView.Start
+V.Local.iCnt.Declare
+V.Local.sSender.Declare
+F.Intrinsic.Control.Try
+
+F.ODBC.Connection!con.OpenCompanyConnection
+
+F.Global.Registry.ReadValue("SUPERVSR",V.Caller.CompanyCode,"Sender",7470,1000,5,"",v.Local.sSender)
+Gui.Form.txtSender.Text(V.Local.sSender.Trim)
+F.Data.Datatable.CreateFromSQL("dtEmails","con","SELECT * FROM GCG_7470_EMAIL ORDER BY 1")
+F.Intrinsic.Control.For(V.Local.iCnt,0,V.DataTable.dtEmails.RowCount--,1)
+	Gui.Form.lvwemail.AddListItem(V.Datatable.dtEmails(V.Local.iCnt).Email!FieldValTrim,V.Datatable.dtEmails(V.Local.iCnt).Email!FieldValTrim)
+F.Intrinsic.Control.Next(V.Local.iCnt)
+
+F.Data.Datatable.Close("dtEmails")
+F.ODBC.Connection!con.Close
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Line: {3}{1}Error Number: {4}{1}Description: {5}{1}{1}GAB Version: {6}",V.Caller.ScriptFile,V.Ambient.NewLine,V.Ambient.CurrentSubroutine,V.Ambient.ErrorLine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Ambient.GABVersion,V.Global.sError)
+	F.Intrinsic.UI.Msgbox(V.Global.sError)
+	F.Intrinsic.Control.End
+F.Intrinsic.Control.EndTry
+Program.Sub.FillListView.End
+
+Program.Sub.Comments.Start
+${$5$}$20.1.8819.26349$}$1
+${$6$}$triley$}$20240311115128728$}$iK6nerqp9nur1h1iSBfRKBBz1ENCgYv6pXwxCmI1yUOh3OqmXNIiL/UIniUynYARnFw4fQo3uwA=
+Program.Sub.Comments.End
