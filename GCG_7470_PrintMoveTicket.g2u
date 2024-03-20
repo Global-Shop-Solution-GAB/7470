@@ -13,7 +13,7 @@ Program.Sub.Preflight.Start
 	V.Global.sSQL.Declare()
 	V.Global.sSuffix.Declare()
 	V.Global.sBody.Declare
-	F.Intrinsic.String.Build("String","A move ticket has been printed. See below for details:{0}{0}#BODY#",V.Ambient.NewLine,V.Global.sBody)
+	F.Intrinsic.String.Build("A move ticket has been printed. See below for details:{0}{0}#BODY#",V.Ambient.NewLine,V.Global.sBody)
 	V.Global.sSubject.Declare("String","Move ticket for Job: #JOB# Suffix: #SUFFIX# Seq: #SEQ#")
 	
 Program.Sub.Preflight.End
@@ -130,6 +130,7 @@ Program.Sub.Main.Start
 		' If called from the Update screen Process (OK) button hook, then print out the good quantity ticket and also any scrap tickets.
 		' Note: If there are multiple jobs being updated, then this hook/script would run multiple times, once for each job to print its tickets.
 		F.Intrinsic.Control.If(V.Caller.Hook, =, "50621")
+		'V.Passed.777777.Set(1)
 			
 			' TODO: figure out a better way than having some variables Global and some passed via CallSub
 			V.Global.sJob.Set(V.Passed.TXT-JOB)
@@ -470,7 +471,7 @@ F.Intrinsic.Control.If(V.Global.sQty.Float,>,0)
 	F.Intrinsic.String.Build("{0}*!*{1}*!*{2}*!*{3}*!*{4}",V.Caller.Terminal,V.Global.sJob,V.Global.sSuffix,V.Local.sScrapflag,V.Local.sValues)
 	F.Intrinsic.String.Split(V.Local.sValues,"*!*",V.Local.sValues)
 	F.Global.BI.PrintReport(V.Local.iRptID,3,V.Local.sParams,V.Local.sValues,V.Local.sTPrinter,True)
-	F.Intrinsic.Control.CallSub(SendEmail)
+	F.Intrinsic.Control.CallSub(SendEmail,"Status","Good")
 	
 	
 F.Intrinsic.Control.Endif
@@ -534,6 +535,7 @@ F.Intrinsic.Control.If(V.Local.sscrapqty.Float,>,0)
 		F.Intrinsic.String.Build("{0}*!*{1}*!*{2}*!*{3}",V.Caller.Terminal,V.Global.sJob,V.Global.sSuffix,V.Local.sScrapflag,V.Local.sValues)
 		F.Intrinsic.String.Split(V.Local.sValues,"*!*",V.Local.sValues)
 		F.Global.BI.PrintReport(V.Local.iRptID,3,V.Local.sParams,V.Local.sValues,V.Local.sScrapPrinter,True)
+		F.Intrinsic.Control.CallSub(SendEmail,"Status","Scrap")
 		
 		
 
@@ -593,10 +595,22 @@ F.ODBC.Connection!conx.OpenCompanyConnection
 'Get sender email from registry
 F.Global.Registry.ReadValue("SUPERVSR",V.Caller.CompanyCode,"Sender",7470,1000,5,"",V.Local.sSender)
 'Pull datatable info from custom table
-F.Intrinsic.String.Build("SELECT JOB, SUFFIX, CUR_SEQ, PART, WORKCENTER AS WC, CUR_DESCR AS DESCR, QTY, EMPLOYEE, NEXT_PART AS NEXT_WC, NEXT_DESCR from GCG_7470_MV_TCKT_LBL WHERE TRMNL = '{0}'",V.Caller.Terminal,V.Local.sSQL)
-F.Data.Datatable.CreateFromSQL("dtExport","conx",V.Local.sSQL,True)
-'Export body to html
-F.Data.Datatable.ExportHTML("dtExport",V.DataTable.dtExport.FieldNames,"Job*!*Suffix*!*Seq*!*Part*!*WC*!*Desc*!*Quantity*!*Employee*!*Next WC/Op*!*Next Desc","",False,V.Local.sBodyHTML)
+F.Intrinsic.Control.If(V.Args.Status,=,"Scrap")
+	F.Intrinsic.String.Build("SELECT JOB, SUFFIX, CUR_SEQ, PART, WORKCENTER AS WC, CUR_DESCR AS DESCR, QTY, EMPLOYEE, NEXT_PART AS NEXT_WC, NEXT_DESCR from GCG_7470_MV_TCKT_LBL WHERE TRMNL = '{0}'",V.Caller.Terminal,V.Local.sSQL)
+	F.Data.Datatable.CreateFromSQL("dtExport","conx",V.Local.sSQL,True)
+	'Export body to html
+	F.Data.Datatable.ExportHTML("dtExport",V.DataTable.dtExport.FieldNames,"Job*!*Suffix*!*Seq*!*Part*!*WC*!*Desc*!*Quantity*!*Employee*!*Next WC/Op*!*Next Desc","",False,V.Local.sBodyHTML)
+	F.Intrinsic.String.Replace(V.Local.sBodyHTML,"<table>","<table style="width:75%">",V.Local.sBodyHTML)
+	F.Intrinsic.String.Replace(V.Local.sBodyHTML,"<th>","<th ALIGN=LEFT>",V.Local.sBodyHTML)
+F.Intrinsic.Control.Else
+	F.Intrinsic.String.Build("SELECT JOB, SUFFIX, CUR_SEQ, PART, WORKCENTER AS WC, CUR_DESCR AS DESCR, QTY, EMPLOYEE, NEXT_PART AS NEXT_WC, NEXT_DESCR from GCG_7470_MV_TCKT_LBL WHERE TRMNL = '{0}'",V.Caller.Terminal,V.Local.sSQL)
+	F.Data.Datatable.CreateFromSQL("dtExport","conx",V.Local.sSQL,True)
+	'Export body to html
+	F.Data.Datatable.ExportHTML("dtExport",V.DataTable.dtExport.FieldNames,"Job*!*Suffix*!*Seq*!*Part*!*WC*!*Desc*!*Quantity*!*Employee*!*Next WC/Op*!*Next Desc","",False,V.Local.sBodyHTML)
+	F.Intrinsic.String.Replace(V.Local.sBodyHTML,"<table>","<table style="width:75%">",V.Local.sBodyHTML)
+	F.Intrinsic.String.Replace(V.Local.sBodyHTML,"<th>","<th ALIGN=LEFT>",V.Local.sBodyHTML)
+F.Intrinsic.Control.EndIf
+
 
 F.ODBC.Connection!conx.Close
 
@@ -607,6 +621,10 @@ V.Local.sSeq.Set(V.DataTable.dtExport(0).CUR_SEQ!Fieldval)
 
 F.Data.Datatable.Close("dtExport")
 
+V.Global.sSubject.Set("Move ticket for Job: #JOB# Suffix: #SUFFIX# Seq: #SEQ#")
+F.Intrinsic.Control.If(V.Args.Status,=,"Scrap")
+	F.Intrinsic.String.Replace(V.Global.sSubject,"Move","Scrap move",V.Global.sSubject)
+F.Intrinsic.Control.EndIf
 F.Intrinsic.String.Replace(V.Global.sSubject,"#JOB#",V.Local.sJob,V.Local.sSubject)
 F.Intrinsic.String.Replace(V.Local.sSubject,"#SUFFIX#",V.Local.sSuffix,V.Local.sSubject)
 F.Intrinsic.String.Replace(V.Local.sSubject,"#SEQ#",V.Local.sSeq,V.Local.sSubject)
@@ -631,5 +649,5 @@ Program.Sub.SendEmail.End
 
 Program.Sub.Comments.Start
 ${$5$}$2.0.0.0$}$2
-${$6$}$triley$}$20240311132914914$}$iK6nerqp9nur1h1iSBfRKBBz1ENCgYv6pXwxCmI1yUPl9MOR3i+iOClmR9TgUoW+GHDXarGoMwQ=
+${$6$}$triley$}$20240319142408604$}$iK6nerqp9nur1h1iSBfRKBBz1ENCgYv6pXwxCmI1yUN9A2jvfYLDUeJVvElpEzqkUpjsmV5OG00=
 Program.Sub.Comments.End
