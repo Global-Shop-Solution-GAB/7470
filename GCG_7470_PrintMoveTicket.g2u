@@ -596,7 +596,7 @@ F.ODBC.Connection!conx.OpenCompanyConnection
 F.Global.Registry.ReadValue("SUPERVSR",V.Caller.CompanyCode,"Sender",7470,1000,5,"",V.Local.sSender)
 'Pull datatable info from custom table
 F.Intrinsic.Control.If(V.Args.Status,=,"Scrap")
-	F.Intrinsic.String.Build("SELECT JOB, SUFFIX, CUR_SEQ, PART, WORKCENTER AS WC, CUR_DESCR AS DESCR, QTY, EMPLOYEE, NEXT_PART AS NEXT_WC, NEXT_DESCR from GCG_7470_MV_TCKT_LBL WHERE TRMNL = '{0}'",V.Caller.Terminal,V.Local.sSQL)
+	F.Intrinsic.String.Build("SELECT JOB, SUFFIX, CUR_SEQ, PART, WORKCENTER AS WC, CUR_DESCR AS DESCR, SCRAP_QTY, EMPLOYEE, NEXT_PART AS NEXT_WC, NEXT_DESCR from GCG_7470_MV_TCKT_LBL WHERE TRMNL = '{0}'",V.Caller.Terminal,V.Local.sSQL)
 	F.Data.Datatable.CreateFromSQL("dtExport","conx",V.Local.sSQL,True)
 	'Export body to html
 	F.Data.Datatable.ExportHTML("dtExport",V.DataTable.dtExport.FieldNames,"Job*!*Suffix*!*Seq*!*Part*!*WC*!*Desc*!*Quantity*!*Employee*!*Next WC/Op*!*Next Desc","",False,V.Local.sBodyHTML)
@@ -649,5 +649,5 @@ Program.Sub.SendEmail.End
 
 Program.Sub.Comments.Start
 ${$5$}$2.0.0.0$}$2
-${$6$}$triley$}$20240319142408604$}$iK6nerqp9nur1h1iSBfRKBBz1ENCgYv6pXwxCmI1yUN9A2jvfYLDUeJVvElpEzqkUpjsmV5OG00=
+${$6$}$triley$}$20240321113532546$}$iK6nerqp9nur1h1iSBfRKBBz1ENCgYv6AFHWdWQZOv7nGV6Rji1ujiTtVNhlI5WZEFE24kmi35Q=
 Program.Sub.Comments.End
